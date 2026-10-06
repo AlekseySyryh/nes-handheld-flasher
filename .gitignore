@@ -1,2 +1,4 @@
 target/
-rp2040_dump.bin
+*.uf2
+*.bin
+*.nes

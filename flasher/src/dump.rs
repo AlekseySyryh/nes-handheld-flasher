@@ -4,7 +4,7 @@
 use std::{
     fs,
     io,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -21,7 +21,7 @@ use flasher_protocol::{
 };
 use serialport::{ClearBuffer, SerialPort};
 
-use crate::{devices, payload::PAYLOAD_UF2};
+use crate::{devices, payload::PAYLOAD_UF2, uf2};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PAYLOAD_START_TIMEOUT: Duration = Duration::from_secs(20);
@@ -35,11 +35,15 @@ pub enum Step {
     WaitPayload,
     Download,
     Reboot,
+    Flash,
+    WaitRestart,
     Finished,
 }
 
 impl Step {
     pub const ALL: [Step; 5] = [Step::WaitBootsel, Step::UploadPayload, Step::WaitPayload, Step::Download, Step::Reboot];
+
+    pub const WRITE: [Step; 3] = [Step::WaitBootsel, Step::Flash, Step::WaitRestart];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -48,6 +52,8 @@ impl Step {
             Step::WaitPayload => "Ожидание запуска пейлоада",
             Step::Download => "Чтение прошивки",
             Step::Reboot => "Перезагрузка устройства",
+            Step::Flash => "Запись прошивки на устройство",
+            Step::WaitRestart => "Прошивка и перезапуск устройства",
             Step::Finished => "Готово",
         }
     }
@@ -69,7 +75,7 @@ pub enum Event {
     Finished(Result<Summary, String>),
 }
 
-struct Reporter {
+pub(crate) struct Reporter {
     tx: Sender<Event>,
     ctx: egui::Context,
     start: Instant,
@@ -77,16 +83,24 @@ struct Reporter {
 }
 
 impl Reporter {
-    fn send(&self, ev: Event) {
+    pub(crate) fn new(tx: Sender<Event>, ctx: egui::Context, cancel: Arc<AtomicBool>) -> Self {
+        Self { tx, ctx, start: Instant::now(), cancel }
+    }
+
+    pub(crate) fn elapsed(&self) -> Duration {
+        self.start.elapsed()
+    }
+
+    pub(crate) fn send(&self, ev: Event) {
         let _ = self.tx.send(ev);
         self.ctx.request_repaint();
     }
 
-    fn log(&self, msg: impl AsRef<str>) {
+    pub(crate) fn log(&self, msg: impl AsRef<str>) {
         self.send(Event::Log(format!("[{:6.2}s] {}", self.start.elapsed().as_secs_f32(), msg.as_ref())));
     }
 
-    fn check_cancel(&self) -> Result<()> {
+    pub(crate) fn check_cancel(&self) -> Result<()> {
         if self.cancel.load(Ordering::Relaxed) {
             bail!("отменено пользователем");
         }
@@ -94,7 +108,7 @@ impl Reporter {
     }
 
     /// Polls `f` until it yields a value, the timeout expires or the user cancels.
-    fn wait_for<T>(&self, timeout: Option<Duration>, what: &str, mut f: impl FnMut() -> Option<T>) -> Result<T> {
+    pub(crate) fn wait_for<T>(&self, timeout: Option<Duration>, what: &str, mut f: impl FnMut() -> Option<T>) -> Result<T> {
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
             self.check_cancel()?;
@@ -109,15 +123,25 @@ impl Reporter {
     }
 }
 
-pub fn spawn(tx: Sender<Event>, ctx: egui::Context, cancel: Arc<AtomicBool>, out_path: PathBuf) {
+/// What to do with the flash contents once they are read.
+pub struct Job {
+    pub dump_path: PathBuf,
+    /// If set, also write the dump as a restorable UF2 file (written last, atomically).
+    pub uf2_path: Option<PathBuf>,
+    /// Send `Reboot` at the end. Must be off while the user still holds the BOOTSEL buttons.
+    pub reboot: bool,
+}
+
+pub fn spawn(tx: Sender<Event>, ctx: egui::Context, cancel: Arc<AtomicBool>, job: Job) {
     thread::spawn(move || {
-        let rep = Reporter { tx, ctx, start: Instant::now(), cancel };
-        let result = run(&rep, &out_path).map_err(|e| format!("{e:#}"));
+        let rep = Reporter::new(tx, ctx, cancel);
+        let result = run(&rep, &job).map_err(|e| format!("{e:#}"));
         rep.send(Event::Finished(result));
     });
 }
 
-fn run(rep: &Reporter, out_path: &Path) -> Result<Summary> {
+fn run(rep: &Reporter, job: &Job) -> Result<Summary> {
+    let out_path = job.dump_path.as_path();
     rep.step(Step::WaitBootsel);
     let drive = rep.wait_for(None, "устройство в режиме BOOTSEL", devices::find_bootsel_drives_first)?;
     rep.log(format!("BOOTSEL: {} (Board-ID {})", drive.mount_point.display(), drive.board_id));
@@ -136,10 +160,22 @@ fn run(rep: &Reporter, out_path: &Path) -> Result<Summary> {
     fs::write(out_path, &dump).with_context(|| format!("запись {}", out_path.display()))?;
     rep.log(format!("Сохранено {} байт в {}, CRC-32 {crc32:08X}", dump.len(), out_path.display()));
 
-    rep.step(Step::Reboot);
-    match transact(port.as_mut(), Request { command: Command::Reboot, arg: 0 }).and_then(|r| expect(r, Kind::Ok)) {
-        Ok(_) => rep.log("Устройство подтвердило перезагрузку"),
-        Err(e) => rep.log(format!("Предупреждение: перезагрузка не подтверждена: {e:#}")),
+    if let Some(uf2_path) = &job.uf2_path {
+        let image = uf2::from_flash_image(&dump);
+        let tmp = uf2_path.with_extension("uf2.tmp");
+        fs::write(&tmp, &image).with_context(|| format!("запись {}", tmp.display()))?;
+        fs::rename(&tmp, uf2_path).with_context(|| format!("переименование в {}", uf2_path.display()))?;
+        rep.log(format!("Резервная копия UF2: {} ({} байт)", uf2_path.display(), image.len()));
+    }
+
+    if job.reboot {
+        rep.step(Step::Reboot);
+        match transact(port.as_mut(), Request { command: Command::Reboot, arg: 0 }).and_then(|r| expect(r, Kind::Ok)) {
+            Ok(_) => rep.log("Устройство подтвердило перезагрузку"),
+            Err(e) => rep.log(format!("Предупреждение: перезагрузка не подтверждена: {e:#}")),
+        }
+    } else {
+        rep.log("Перезагрузка не выполняется: пейлоад остаётся в RAM до переподключения устройства");
     }
 
     rep.step(Step::Finished);
@@ -147,7 +183,7 @@ fn run(rep: &Reporter, out_path: &Path) -> Result<Summary> {
 }
 
 impl Reporter {
-    fn step(&self, step: Step) {
+    pub(crate) fn step(&self, step: Step) {
         self.log(format!("== {}", step.label()));
         self.send(Event::Step(step));
     }

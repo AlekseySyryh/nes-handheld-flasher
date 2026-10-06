@@ -1,0 +1,20 @@
+#!/bin/sh
+# Rejects commits that contain firmware dumps, UF2 images or NES ROMs (copyrighted data).
+# Enable once per clone:  git config core.hooksPath .githooks
+
+forbidden='\.(bin|uf2|nes)$'
+bad=""
+
+for f in $(git diff --cached --name-only --diff-filter=ACM); do
+    if printf '%s' "$f" | grep -Eiq "$forbidden"; then
+        bad="$bad\n  $f (запрещённое расширение)"
+    elif [ "$(git show ":$f" 2>/dev/null | head -c 4 | od -An -tx1 | tr -d ' \n')" = "4e45531a" ]; then
+        bad="$bad\n  $f (похоже на iNES ROM)"
+    fi
+done
+
+if [ -n "$bad" ]; then
+    printf 'Коммит отклонён: в индексе файлы, которые нельзя публиковать:%b\n' "$bad" >&2
+    printf 'Уберите их командой: git restore --staged <файл>\n' >&2
+    exit 1
+fi
