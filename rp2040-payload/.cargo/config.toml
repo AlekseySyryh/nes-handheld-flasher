@@ -1,0 +1,11 @@
+[build]
+target = "thumbv6m-none-eabi"
+
+[target.thumbv6m-none-eabi]
+# Converts the ELF to UF2 and copies it to a BOOTSEL drive: `cargo install elf2uf2-rs`
+runner = "elf2uf2-rs -d"
+rustflags = [
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tlink.x",
+  "-C", "target-cpu=cortex-m0plus",
+]

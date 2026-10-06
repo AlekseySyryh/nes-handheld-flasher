@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["flasher"]
+# The firmware is a standalone project (own target and Cargo.lock).
+# It is built and embedded into the flasher by `flasher/build.rs`.
+exclude = ["rp2040-payload"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"

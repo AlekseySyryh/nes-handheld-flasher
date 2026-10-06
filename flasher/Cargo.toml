@@ -1,0 +1,15 @@
+[package]
+name = "flasher"
+description = "Desktop flasher for RP2040-based console modchips"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+eframe = "0.36.2"
+serialport = "4.10.1"
+sysinfo = "0.39.6"
+
+[build-dependencies]
+object = { version = "0.40.0", default-features = false, features = ["read_core", "elf", "std"] }
