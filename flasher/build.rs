@@ -33,6 +33,8 @@ fn main() {
     for input in PAYLOAD_INPUTS {
         println!("cargo:rerun-if-changed={}", payload_dir.join(input).display());
     }
+    // Path dependency of the payload.
+    println!("cargo:rerun-if-changed={}", manifest_dir.join("..").join("protocol").display());
 
     // OUT_DIR = <target>/<profile>/build/<pkg>-<hash>/out; keep the payload build next to
     // the host artifacts so it survives build script reruns and is reused incrementally.

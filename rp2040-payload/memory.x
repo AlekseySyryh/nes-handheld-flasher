@@ -1,14 +1,7 @@
+/* RAM-only image: loaded by the BOOTSEL UF2 bootloader straight into SRAM and executed there,
+   so the flash chip is left untouched. The vector table must sit at the very start of the image,
+   which is why the "FLASH" region (code, rodata, .data load image) is placed at the SRAM base. */
 MEMORY {
-    BOOT2 : ORIGIN = 0x10000000, LENGTH = 0x100
-    FLASH : ORIGIN = 0x10000100, LENGTH = 2048K - 0x100
-    RAM   : ORIGIN = 0x20000000, LENGTH = 256K
+    FLASH : ORIGIN = 0x20000000, LENGTH = 128K
+    RAM   : ORIGIN = 0x20020000, LENGTH = 128K
 }
-
-EXTERN(BOOT2_FIRMWARE)
-
-SECTIONS {
-    .boot2 ORIGIN(BOOT2) :
-    {
-        KEEP(*(.boot2));
-    } > BOOT2
-} INSERT BEFORE .text;
