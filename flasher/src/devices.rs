@@ -1,22 +1,13 @@
 use std::path::PathBuf;
 
+use flasher_protocol::{USB_PID, USB_VID};
 use serialport::SerialPortType;
 use sysinfo::Disks;
-
-/// Raspberry Pi USB vendor ID.
-pub const RPI_VID: u16 = 0x2E8A;
 
 #[derive(Debug, Clone)]
 pub struct BootselDrive {
     pub mount_point: PathBuf,
     pub board_id: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct UartPort {
-    pub name: String,
-    pub description: String,
-    pub is_rpi: bool,
 }
 
 /// Finds mounted RP2040 BOOTSEL mass storage drives (identified by `INFO_UF2.TXT`).
@@ -36,26 +27,15 @@ pub fn find_bootsel_drives() -> Vec<BootselDrive> {
         .collect()
 }
 
-/// Lists available serial (UART / USB CDC) ports.
-pub fn find_uart_ports() -> anyhow::Result<Vec<UartPort>> {
-    Ok(serialport::available_ports()?
+pub fn find_bootsel_drives_first() -> Option<BootselDrive> {
+    find_bootsel_drives().into_iter().next()
+}
+
+/// Finds the serial port exposed by the running payload (by USB VID/PID).
+pub fn find_payload_port() -> Option<String> {
+    serialport::available_ports()
+        .ok()?
         .into_iter()
-        .map(|p| {
-            let (description, is_rpi) = match &p.port_type {
-                SerialPortType::UsbPort(usb) => (
-                    format!(
-                        "USB {:04X}:{:04X} {}",
-                        usb.vid,
-                        usb.pid,
-                        usb.product.as_deref().unwrap_or("")
-                    ),
-                    usb.vid == RPI_VID,
-                ),
-                SerialPortType::PciPort => ("PCI".into(), false),
-                SerialPortType::BluetoothPort => ("Bluetooth".into(), false),
-                SerialPortType::Unknown => ("Unknown".into(), false),
-            };
-            UartPort { name: p.port_name, description, is_rpi }
-        })
-        .collect())
+        .find(|p| matches!(&p.port_type, SerialPortType::UsbPort(u) if u.vid == USB_VID && u.pid == USB_PID))
+        .map(|p| p.port_name)
 }

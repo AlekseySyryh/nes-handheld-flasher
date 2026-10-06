@@ -1083,6 +1083,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "eframe",
+ "flasher-protocol",
  "object",
  "serialport",
  "sysinfo",
