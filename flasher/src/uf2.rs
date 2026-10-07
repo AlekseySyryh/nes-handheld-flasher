@@ -47,9 +47,49 @@ pub fn from_flash_range(image: &[u8], start: usize, end: usize) -> Vec<u8> {
     out
 }
 
+/// Checks that `data` is a well-formed RP2040 UF2 file targeting flash; returns the block count.
+pub fn validate(data: &[u8]) -> Result<usize, String> {
+    if data.is_empty() || !data.len().is_multiple_of(BLOCK_LEN) {
+        return Err(format!("размер файла ({} байт) не кратен {BLOCK_LEN}", data.len()));
+    }
+    let total = data.len() / BLOCK_LEN;
+    for (n, b) in data.chunks(BLOCK_LEN).enumerate() {
+        let w = |i: usize| u32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap());
+        let bad = |what: &str| Err(format!("блок {n}: {what}"));
+        if [w(0), w(1), w(127)] != [MAGIC_START0, MAGIC_START1, MAGIC_END] {
+            return bad("неверные magic-числа");
+        }
+        if w(2) & FLAG_FAMILY_ID_PRESENT == 0 || w(7) != RP2040_FAMILY_ID {
+            return bad("не RP2040");
+        }
+        if w(4) as usize != PAGE {
+            return bad("размер данных не равен 256");
+        }
+        if w(3) < FLASH_BASE || w(3) as usize + PAGE > FLASH_BASE as usize + 16 * 1024 * 1024 {
+            return bad("адрес вне флеша");
+        }
+        if (w(5) as usize, w(6) as usize) != (n, total) {
+            return bad("неверная нумерация блоков");
+        }
+    }
+    Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_accepts_good_and_rejects_bad() {
+        let uf2 = from_flash_image(&[7; PAGE * 3]);
+        assert_eq!(validate(&uf2), Ok(3));
+        assert!(validate(&uf2[..uf2.len() - 1]).is_err());
+        assert!(validate(&uf2[BLOCK_LEN..]).is_err());
+        let mut broken = uf2.clone();
+        broken[BLOCK_LEN] ^= 1;
+        assert!(validate(&broken).is_err());
+        assert!(validate(&[]).is_err());
+    }
 
     #[test]
     fn blocks_are_well_formed_and_carry_the_image() {

@@ -27,6 +27,7 @@ const UF2_PAGE_SIZE: u32 = 256;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    emit_build_info(&manifest_dir);
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let payload_dir = manifest_dir.join("..").join(PAYLOAD_NAME);
 
@@ -39,10 +40,48 @@ fn main() {
     // OUT_DIR = <target>/<profile>/build/<pkg>-<hash>/out; keep the payload build next to
     // the host artifacts so it survives build script reruns and is reused incrementally.
     let target_dir = out_dir.ancestors().nth(4).unwrap().join(PAYLOAD_NAME);
+    let payload_version = fs::read_to_string(payload_dir.join("Cargo.toml"))
+        .ok()
+        .and_then(|t| {
+            t.lines().find_map(|l| l.trim().strip_prefix("version")?.trim_start().strip_prefix('=')?.trim().strip_prefix('"')?.split('"').next().map(String::from))
+        })
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=PAYLOAD_VERSION={payload_version}");
     let elf_path = build_payload(&payload_dir, &target_dir);
 
     let elf = fs::read(&elf_path).unwrap_or_else(|e| panic!("reading {}: {e}", elf_path.display()));
     fs::write(out_dir.join(format!("{PAYLOAD_NAME}.uf2")), elf_to_uf2(&elf)).unwrap();
+}
+
+/// Exposes `BUILD_DATE` (UTC, YYYY-MM-DD) and `BUILD_GIT_HASH` to the crate.
+fn emit_build_info(manifest_dir: &Path) {
+    println!("cargo:rerun-if-changed={}", manifest_dir.join("..").join(".git").join("HEAD").display());
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .current_dir(manifest_dir)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let mut hash = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    if git(&["status", "--porcelain"]).is_some_and(|s| !s.is_empty()) {
+        hash.push_str("-dirty");
+    }
+    // Civil date from the Unix day count (Howard Hinnant's algorithm).
+    let days = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 / 86400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    println!("cargo:rustc-env=BUILD_DATE={year:04}-{month:02}-{day:02}");
+    println!("cargo:rustc-env=BUILD_GIT_HASH={hash}");
 }
 
 fn build_payload(payload_dir: &Path, target_dir: &Path) -> PathBuf {

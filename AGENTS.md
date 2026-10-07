@@ -24,6 +24,12 @@
   `firmware.uf2` to the drive and waits for the drive to vanish. Refuses to run without `backup.uf2`.
   Restore = copy `backup.uf2` (full image) to a BOOTSEL drive.
 
+- UI conventions: tabs "Игры" / "Чтение прошивки" / "Восстановление из резервной копии" / "О программе" (hidden
+  during write/restore/first backup). BOOTSEL instructions are always visible on every BOOTSEL form; after a
+  successful dump/write/restore the app returns to "Игры" with a notice. Restore validates `backup.uf2`
+  (`uf2::validate`) and asks for confirmation; "Записать на приставку" offers to save unsaved edits first.
+  "О программе" shows the version (`flasher/Cargo.toml`), build date and git hash (`flasher/build.rs`).
+
 Commands:
 - `cargo build` / `cargo run` in the root — builds the flasher (and the payload through build.rs).
 - `cargo build` inside `rp2040-payload/` — firmware only; `cargo run` there flashes via `elf2uf2-rs -d`.

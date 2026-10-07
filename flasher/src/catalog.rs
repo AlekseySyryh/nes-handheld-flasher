@@ -119,6 +119,17 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// The iNES file without the zero padding added for flash alignment.
+    pub fn ines_file(&self) -> &[u8] {
+        let r = &self.rom;
+        if r.len() < 16 || r[..4] != INES_MAGIC {
+            return r;
+        }
+        let trainer = if r[6] & 4 != 0 { 512 } else { 0 };
+        let len = 16 + trainer + r[4] as usize * 16 * 1024 + r[5] as usize * 8 * 1024;
+        &r[..len.min(r.len())]
+    }
+
     pub fn ines(&self) -> Option<Ines> {
         parse_ines(&self.rom)
     }

@@ -36,6 +36,8 @@ enum Screen {
     Write,
     Games,
     Dump,
+    Restore,
+    About,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -43,6 +45,7 @@ enum Mode {
     Dump,
     Backup,
     Write,
+    Restore,
 }
 
 struct FlasherApp {
@@ -52,6 +55,8 @@ struct FlasherApp {
     selected: Option<usize>,
     status: Option<(bool, String)>,
     dirty: bool,
+    confirm_flash: bool,
+    confirm_restore: bool,
     out_path: String,
     backup_path: PathBuf,
     mode: Mode,
@@ -82,6 +87,8 @@ impl FlasherApp {
             selected: None,
             status: None,
             dirty: false,
+            confirm_flash: false,
+            confirm_restore: false,
             out_path: dump_path,
             backup_path,
             mode: Mode::Dump,
@@ -165,8 +172,27 @@ impl FlasherApp {
         self.result = None;
     }
 
+    fn start_restore(&mut self, ctx: &egui::Context) {
+        let name = self.backup_path.display().to_string();
+        let data = std::fs::read(&self.backup_path)
+            .map_err(|e| format!("{name}: {e}"))
+            .and_then(|d| uf2::validate(&d).map(|_| d).map_err(|e| format!("{name} повреждён: {e}")));
+        match data {
+            Ok(data) => {
+                self.write_uf2 = Some(Arc::new(data));
+                self.start_write(ctx);
+                self.mode = Mode::Restore;
+            }
+            Err(e) => {
+                self.step = None;
+                self.result = Some(Err(e));
+            }
+        }
+    }
+
     fn poll_events(&mut self) {
         let Some(run) = &self.run else { return };
+        let mut restored = false;
         let mut finished = false;
         let mut reload = false;
         let mut written = false;
@@ -180,7 +206,9 @@ impl FlasherApp {
                         self.log.push(format!("ОШИБКА: {e}"));
                     }
                     if let Ok(summary) = &r {
-                        if self.mode == Mode::Write {
+                        if self.mode == Mode::Restore {
+                            restored = true;
+                        } else if self.mode == Mode::Write {
                             written = true;
                         } else {
                             self.library_path = summary.path.display().to_string();
@@ -194,8 +222,10 @@ impl FlasherApp {
         }
         if reload {
             self.load_library();
-            if self.mode == Mode::Backup {
-                self.screen = Screen::Games;
+            self.screen = Screen::Games;
+            if self.mode == Mode::Dump {
+                self.notice = Some(format!("Прошивка прочитана: {}", self.library_path));
+            } else {
                 let what = if self.backup_kept {
                     "Дамп rp2040_dump.bin обновлён, существующий backup.uf2 сохранён."
                 } else {
@@ -218,6 +248,10 @@ impl FlasherApp {
                 self.backup_path.display()
             ));
         }
+        if restored {
+            self.screen = Screen::Games;
+            self.notice = Some("Восстановление завершено, устройство перезапущено. Теперь можно отпустить Start.".into());
+        }
         if finished {
             self.run = None;
         }
@@ -235,10 +269,14 @@ impl eframe::App for FlasherApp {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("RP2040 Flasher");
-                if !matches!(self.screen, Screen::Backup | Screen::Write) {
+                if !matches!(self.screen, Screen::Backup | Screen::Write)
+                    && !(self.screen == Screen::Restore && self.run.is_some())
+                {
                     ui.separator();
                     ui.selectable_value(&mut self.screen, Screen::Games, "Игры");
                     ui.selectable_value(&mut self.screen, Screen::Dump, "Чтение прошивки");
+                    ui.selectable_value(&mut self.screen, Screen::Restore, "Восстановление из резервной копии");
+                    ui.selectable_value(&mut self.screen, Screen::About, "О программе");
                 }
             });
             ui.separator();
@@ -247,6 +285,20 @@ impl eframe::App for FlasherApp {
                 Screen::Write => self.ui_write(ui),
                 Screen::Games => self.ui_games(ui),
                 Screen::Dump => self.ui_dump(ui),
+                Screen::Restore => self.ui_restore(ui),
+                Screen::About => {
+                    ui.heading("О программе");
+                    ui.label(format!("RP2040 Flasher, версия {}", env!("CARGO_PKG_VERSION")));
+                    ui.add_space(6.0);
+                    ui.label("Инструмент предназначен для работы с собственным устройством и данными пользователя. Программа не содержит игр; за использование и распространение выгруженных ROM отвечает пользователь.");
+                    ui.add_space(6.0);
+                    ui.weak(format!("Сборка: {} ({})", env!("BUILD_DATE"), env!("BUILD_GIT_HASH")));
+                    ui.weak(format!(
+                        "Встроенный пейлоад: версия {}, {} байт (UF2)",
+                        env!("PAYLOAD_VERSION"),
+                        payload::PAYLOAD_UF2.len()
+                    ));
+                }
             }
         });
     }
@@ -270,9 +322,11 @@ impl FlasherApp {
             }
         }
         let mut load = false;
+        let mut save = false;
         ui.horizontal(|ui| {
             ui.label("Файл дампа:");
-            ui.text_edit_singleline(&mut self.library_path);
+            let width = (ui.available_width() - 270.0).max(120.0);
+            ui.add(egui::TextEdit::singleline(&mut self.library_path).desired_width(width));
             if ui.button("Обзор…").clicked()
                 && let Some(path) = rfd::FileDialog::new().add_filter("BIN", &["bin"]).pick_file()
             {
@@ -280,6 +334,9 @@ impl FlasherApp {
                 load = true;
             }
             load |= ui.button("Загрузить").clicked();
+            save = ui
+                .add_enabled(matches!(self.library, Some(Ok(_))), egui::Button::new("Сохранить…"))
+                .clicked();
         });
         ui.horizontal(|ui| {
             ui.weak(format!("Резервная копия: {}", self.backup_path.display()));
@@ -293,7 +350,7 @@ impl FlasherApp {
         }
 
         let mut flash = false;
-        let Self { library, selected, status, dirty, .. } = self;
+        let Self { library, selected, status, dirty, library_path, .. } = self;
         match library {
             None => {
                 ui.weak("Укажите файл дампа и нажмите «Загрузить» (или скачайте его на вкладке «Чтение прошивки»).");
@@ -304,7 +361,7 @@ impl FlasherApp {
             Some(Ok(lib)) => {
                 match games_editor(ui, lib, selected, dirty) {
                     Some(Action::Flash) => flash = true,
-                    Some(action) => *status = Some(apply_action(action, lib, selected, dirty)),
+                    Some(action) => *status = Some(apply_action(action, lib, selected, dirty, library_path)),
                     None => {}
                 }
                 if let Some((is_err, msg)) = status {
@@ -312,8 +369,52 @@ impl FlasherApp {
                 }
             }
         }
+        if save {
+            self.save_library();
+        }
         if flash {
-            self.begin_write(&ui.ctx().clone());
+            if self.dirty {
+                self.confirm_flash = true;
+            } else {
+                self.begin_write(&ui.ctx().clone());
+            }
+        }
+        if self.confirm_flash {
+            let mut choice = None;
+            egui::Window::new("Прошивка не сохранена")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.label("В списке игр есть несохранённые изменения. Сохранить прошивку в файл перед записью на приставку?");
+                    ui.horizontal(|ui| {
+                        if ui.button("Сохранить и записать").clicked() {
+                            choice = Some(0);
+                        }
+                        if ui.button("Записать без сохранения").clicked() {
+                            choice = Some(1);
+                        }
+                        if ui.button("Отмена").clicked() {
+                            choice = Some(2);
+                        }
+                    });
+                });
+            if choice.is_some() {
+                self.confirm_flash = false;
+            }
+            if choice == Some(0) {
+                self.save_library();
+            }
+            if matches!(choice, Some(0 | 1)) && (choice == Some(1) || !self.dirty) {
+                self.begin_write(&ui.ctx().clone());
+            }
+        }
+    }
+
+    fn save_library(&mut self) {
+        if let Some(Ok(lib)) = &mut self.library {
+            self.status =
+                Some(apply_action(Action::Save, lib, &mut self.selected, &mut self.dirty, &self.library_path));
         }
     }
 
@@ -352,22 +453,95 @@ impl FlasherApp {
         }
     }
 
+    fn ui_restore(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        ui.heading("Восстановление из резервной копии");
+        ui.label(format!("Полный образ {} будет записан на устройство.", self.backup_path.display()));
+        let has_backup = self.backup_path.is_file();
+        if !has_backup {
+            ui.colored_label(err_color(ui), "Файл backup.uf2 не найден рядом с программой.");
+        }
+        if let Some(notice) = &self.notice {
+            ui.colored_label(ok_color(ui), notice.as_str());
+        }
+        ui.add_space(6.0);
+        ui.group(|ui| {
+            ui_bootsel_steps(ui);
+            ui.add_space(4.0);
+            ui.colored_label(
+                warn_color(ui),
+                "Держите Start до сообщения о завершении записи: если отпустить его раньше, консоль выйдет из режима BOOTSEL посреди записи.",
+            );
+            ui.weak("Можно нажать «Восстановить» до этого: программа дождётся устройства.");
+        });
+        ui.add_space(6.0);
+        if let Some(run) = &self.run {
+            let waiting = self.step == Some(Step::WaitBootsel);
+            if ui.add_enabled(waiting, egui::Button::new("Отмена")).clicked() {
+                run.cancel.store(true, Ordering::Relaxed);
+            }
+        } else if ui.add_enabled(has_backup, egui::Button::new("Восстановить")).clicked() {
+            self.confirm_restore = true;
+        }
+        if self.confirm_restore {
+            let mut choice = None;
+            egui::Window::new("Восстановить прошивку?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.label("Вся прошивка приставки, включая настройки и сохранения, будет заменена содержимым backup.uf2. Игры, добавленные после резервной копии, будут потеряны.");
+                    ui.horizontal(|ui| {
+                        if ui.button("Восстановить").clicked() {
+                            choice = Some(true);
+                        }
+                        if ui.button("Отмена").clicked() {
+                            choice = Some(false);
+                        }
+                    });
+                });
+            if let Some(go) = choice {
+                self.confirm_restore = false;
+                if go {
+                    self.notice = None;
+                    self.start_restore(&ctx);
+                }
+            }
+        }
+        ui.separator();
+        if self.mode == Mode::Restore {
+            self.ui_progress(ui);
+        }
+    }
+
     fn ui_dump(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let running = self.run.is_some();
         ui.add_enabled_ui(!running, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Сохранить прошивку в:");
-                ui.text_edit_singleline(&mut self.out_path);
+                let width = (ui.available_width() - 90.0).max(120.0);
+                ui.add(egui::TextEdit::singleline(&mut self.out_path).desired_width(width));
+                if ui.button("Обзор…").clicked() {
+                    let mut dialog = rfd::FileDialog::new().add_filter("BIN", &["bin"]);
+                    let current = std::path::Path::new(self.out_path.trim());
+                    if let Some(dir) = current.parent().filter(|d| d.is_dir()) {
+                        dialog = dialog.set_directory(dir);
+                    }
+                    dialog = dialog.set_file_name(
+                        current.file_name().map_or_else(|| "rp2040_dump.bin".into(), |n| n.to_string_lossy().into_owned()),
+                    );
+                    if let Some(path) = dialog.save_file() {
+                        self.out_path = path.display().to_string();
+                    }
+                }
             });
         });
-        if !running && self.step.is_none() {
-            ui.add_space(6.0);
-            ui.group(|ui| {
-                ui_bootsel_steps(ui);
-                ui.weak("Можно нажать «Начать» до этого: программа дождётся устройства.");
-            });
-        }
+        ui.add_space(6.0);
+        ui.group(|ui| {
+            ui_bootsel_steps(ui);
+            ui.weak("Можно нажать «Начать» до этого: программа дождётся устройства.");
+        });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if let Some(run) = &self.run {
@@ -410,7 +584,7 @@ impl FlasherApp {
         match self.mode {
             Mode::Dump => &Step::ALL,
             Mode::Backup => &Step::ALL,
-            Mode::Write => &Step::WRITE,
+            Mode::Write | Mode::Restore => &Step::WRITE,
         }
     }
 
@@ -432,7 +606,7 @@ impl FlasherApp {
             }
             if self.progress.1 > 0 {
                 let (done, total) = self.progress;
-                let text = if self.mode == Mode::Write {
+                let text = if matches!(self.mode, Mode::Write | Mode::Restore) {
                     format!("{}% ({done}/{total} блоков UF2)", done * 100 / total)
                 } else {
                     format!("{done}/{total} блоков")
@@ -521,6 +695,7 @@ enum Action {
     Replace,
     Remove,
     Move { up: bool },
+    Export,
     Save,
     Flash,
 }
@@ -605,12 +780,11 @@ fn games_editor(
             };
             button(ui, "Добавить…", true, Action::Add);
             button(ui, "Изменить…", has_sel, Action::Replace);
+            button(ui, "Выгрузить в .nes…", has_sel, Action::Export);
             button(ui, "Удалить", has_sel, Action::Remove);
             ui.add_space(8.0);
             button(ui, "Вверх", selected.is_some_and(|i| i > 0), Action::Move { up: true });
             button(ui, "Вниз", selected.is_some_and(|i| i + 1 < lib.entries.len()), Action::Move { up: false });
-            ui.add_space(8.0);
-            button(ui, "Сохранить…", true, Action::Save);
             ui.add_space(8.0);
             button(ui, "Записать на приставку", true, Action::Flash);
         });
@@ -645,6 +819,7 @@ fn apply_action(
     lib: &mut catalog::Library,
     selected: &mut Option<usize>,
     dirty: &mut bool,
+    current_file: &str,
 ) -> (bool, String) {
     let err = |e: &dyn std::fmt::Display| (true, format!("Ошибка: {e}"));
     match action {
@@ -691,14 +866,37 @@ fn apply_action(
             (false, "Порядок изменён, номера обновлены".into())
         }
         Action::Flash => (false, String::new()),
+        Action::Export => {
+            let Some(entry) = selected.and_then(|i| lib.entries.get(i)) else { return (false, String::new()) };
+            let file_name: String =
+                entry.name.chars().map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c }).collect();
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("NES ROM", &["nes"])
+                .set_file_name(format!("{}.nes", file_name.trim()))
+                .save_file()
+            else {
+                return (false, "Отменено".into());
+            };
+            let data = entry.ines_file();
+            match std::fs::write(&path, data) {
+                Ok(()) => (false, format!("Выгружено: {} ({} байт)", path.display(), data.len())),
+                Err(e) => err(&e),
+            }
+        }
         Action::Save => {
             let image = match lib.build() {
                 Ok(v) => v,
                 Err(e) => return err(&format!("{e:#}")),
             };
-            let Some(path) =
-                rfd::FileDialog::new().add_filter("BIN", &["bin"]).set_file_name("rp2040_modified.bin").save_file()
-            else {
+            let mut dialog = rfd::FileDialog::new().add_filter("BIN", &["bin"]);
+            let current = std::path::Path::new(current_file.trim());
+            if let Some(dir) = current.parent().filter(|d| d.is_dir()) {
+                dialog = dialog.set_directory(dir);
+            }
+            dialog = dialog.set_file_name(
+                current.file_name().map_or_else(|| "rp2040_dump.bin".into(), |n| n.to_string_lossy().into_owned()),
+            );
+            let Some(path) = dialog.save_file() else {
                 return (false, "Отменено".into());
             };
             match std::fs::write(&path, &image) {
