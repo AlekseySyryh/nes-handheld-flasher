@@ -16,7 +16,14 @@ use object::{
 const PAYLOAD_TARGET: &str = "thumbv6m-none-eabi";
 const PAYLOAD_NAME: &str = "rp2040-payload";
 /// Files of the payload project that should trigger a rebuild.
-const PAYLOAD_INPUTS: &[&str] = &["src", "Cargo.toml", "Cargo.lock", "build.rs", "memory.x", ".cargo/config.toml"];
+const PAYLOAD_INPUTS: &[&str] = &[
+    "src",
+    "Cargo.toml",
+    "Cargo.lock",
+    "build.rs",
+    "memory.x",
+    ".cargo/config.toml",
+];
 
 const UF2_MAGIC_START0: u32 = 0x0A32_4655;
 const UF2_MAGIC_START1: u32 = 0x9E5D_5157;
@@ -32,10 +39,16 @@ fn main() {
     let payload_dir = manifest_dir.join("..").join(PAYLOAD_NAME);
 
     for input in PAYLOAD_INPUTS {
-        println!("cargo:rerun-if-changed={}", payload_dir.join(input).display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            payload_dir.join(input).display()
+        );
     }
     // Path dependency of the payload.
-    println!("cargo:rerun-if-changed={}", manifest_dir.join("..").join("protocol").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("..").join("protocol").display()
+    );
 
     // OUT_DIR = <target>/<profile>/build/<pkg>-<hash>/out; keep the payload build next to
     // the host artifacts so it survives build script reruns and is reused incrementally.
@@ -43,19 +56,36 @@ fn main() {
     let payload_version = fs::read_to_string(payload_dir.join("Cargo.toml"))
         .ok()
         .and_then(|t| {
-            t.lines().find_map(|l| l.trim().strip_prefix("version")?.trim_start().strip_prefix('=')?.trim().strip_prefix('"')?.split('"').next().map(String::from))
+            t.lines().find_map(|l| {
+                l.trim()
+                    .strip_prefix("version")?
+                    .trim_start()
+                    .strip_prefix('=')?
+                    .trim()
+                    .strip_prefix('"')?
+                    .split('"')
+                    .next()
+                    .map(String::from)
+            })
         })
         .unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=PAYLOAD_VERSION={payload_version}");
     let elf_path = build_payload(&payload_dir, &target_dir);
 
     let elf = fs::read(&elf_path).unwrap_or_else(|e| panic!("reading {}: {e}", elf_path.display()));
-    fs::write(out_dir.join(format!("{PAYLOAD_NAME}.uf2")), elf_to_uf2(&elf)).unwrap();
+    fs::write(
+        out_dir.join(format!("{PAYLOAD_NAME}.uf2")),
+        elf_to_uf2(&elf),
+    )
+    .unwrap();
 }
 
 /// Exposes `BUILD_DATE` (UTC, YYYY-MM-DD) and `BUILD_GIT_HASH` to the crate.
 fn emit_build_info(manifest_dir: &Path) {
-    println!("cargo:rerun-if-changed={}", manifest_dir.join("..").join(".git").join("HEAD").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("..").join(".git").join("HEAD").display()
+    );
     let git = |args: &[&str]| {
         Command::new("git")
             .current_dir(manifest_dir)
@@ -70,7 +100,11 @@ fn emit_build_info(manifest_dir: &Path) {
         hash.push_str("-dirty");
     }
     // Civil date from the Unix day count (Howard Hinnant's algorithm).
-    let days = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 / 86400;
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        / 86400;
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -88,7 +122,13 @@ fn build_payload(payload_dir: &Path, target_dir: &Path) -> PathBuf {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut cmd = Command::new(cargo);
     cmd.current_dir(payload_dir)
-        .args(["build", "--release", "--target", PAYLOAD_TARGET, "--target-dir"])
+        .args([
+            "build",
+            "--release",
+            "--target",
+            PAYLOAD_TARGET,
+            "--target-dir",
+        ])
         .arg(target_dir);
 
     // Variables set by the outer cargo for this build script would leak into the nested build
@@ -96,7 +136,10 @@ fn build_payload(payload_dir: &Path, target_dir: &Path) -> PathBuf {
     for (key, _) in env::vars_os() {
         let key = key.to_string_lossy();
         if (key.starts_with("CARGO_") && key != "CARGO_HOME" && key != "CARGO_MAKEFLAGS")
-            || matches!(&*key, "RUSTFLAGS" | "RUSTC_WRAPPER" | "RUSTC_WORKSPACE_WRAPPER")
+            || matches!(
+                &*key,
+                "RUSTFLAGS" | "RUSTC_WRAPPER" | "RUSTC_WORKSPACE_WRAPPER"
+            )
         {
             cmd.env_remove(&*key);
         }
@@ -104,7 +147,10 @@ fn build_payload(payload_dir: &Path, target_dir: &Path) -> PathBuf {
 
     let status = cmd.status().expect("failed to spawn cargo for the payload");
     assert!(status.success(), "building {PAYLOAD_NAME} failed");
-    target_dir.join(PAYLOAD_TARGET).join("release").join(PAYLOAD_NAME)
+    target_dir
+        .join(PAYLOAD_TARGET)
+        .join("release")
+        .join(PAYLOAD_NAME)
 }
 
 /// Converts loadable ELF segments (by physical/load address) into RP2040 UF2 blocks.
@@ -121,7 +167,9 @@ fn elf_to_uf2(elf: &[u8]) -> Vec<u8> {
         let base = ph.p_paddr(endian);
         for (i, byte) in data.iter().enumerate() {
             let addr = base + i as u32;
-            let page = pages.entry(addr & !(UF2_PAGE_SIZE - 1)).or_insert([0; UF2_PAGE_SIZE as usize]);
+            let page = pages
+                .entry(addr & !(UF2_PAGE_SIZE - 1))
+                .or_insert([0; UF2_PAGE_SIZE as usize]);
             page[(addr % UF2_PAGE_SIZE) as usize] = *byte;
         }
     }

@@ -68,7 +68,10 @@ pub fn parse(dump: &[u8]) -> Result<Catalog> {
             game
         })
         .collect();
-    Ok(Catalog { table_offset, games })
+    Ok(Catalog {
+        table_offset,
+        games,
+    })
 }
 
 fn parse_entry(dump: &[u8], pos: usize) -> Option<Game> {
@@ -76,7 +79,11 @@ fn parse_entry(dump: &[u8], pos: usize) -> Option<Game> {
     if e[NAME_LEN..NAME_LEN + 4] != ENTRY_MAGIC {
         return None;
     }
-    let name_bytes: Vec<u8> = e[..NAME_LEN].iter().copied().take_while(|&b| b != 0x00 && b != 0xFF).collect();
+    let name_bytes: Vec<u8> = e[..NAME_LEN]
+        .iter()
+        .copied()
+        .take_while(|&b| b != 0x00 && b != 0xFF)
+        .collect();
     if name_bytes.is_empty() || !name_bytes.iter().all(|b| (0x20..0x7F).contains(b)) {
         return None;
     }
@@ -86,7 +93,12 @@ fn parse_entry(dump: &[u8], pos: usize) -> Option<Game> {
     if rom_size == 0 || end > dump.len() {
         return None;
     }
-    Some(Game { name: String::from_utf8(name_bytes).ok()?, rom_offset, rom_size, ines: None })
+    Some(Game {
+        name: String::from_utf8(name_bytes).ok()?,
+        rom_offset,
+        rom_size,
+        ines: None,
+    })
 }
 
 fn parse_ines(rom: &[u8]) -> Option<Ines> {
@@ -99,7 +111,11 @@ fn parse_ines(rom: &[u8]) -> Option<Ines> {
     if rom[12..16] == [0; 4] {
         mapper |= (rom[7] & 0xF0) as u16;
     }
-    Some(Ines { prg_kib: rom[4] as u32 * 16, chr_kib: rom[5] as u32 * 8, mapper })
+    Some(Ines {
+        prg_kib: rom[4] as u32 * 16,
+        chr_kib: rom[5] as u32 * 8,
+        mapper,
+    })
 }
 
 /// Maximum length of a game name without the "NN " number prefix.
@@ -148,13 +164,21 @@ pub struct Library {
 
 /// Keeps printable ASCII only and limits the length so that "NN " + name fits the 20-byte field.
 pub fn clean_name(s: &str, trim: bool) -> String {
-    let s: String = s.chars().filter(|c| (' '..='~').contains(c)).take(MAX_BASE_NAME).collect();
+    let s: String = s
+        .chars()
+        .filter(|c| (' '..='~').contains(c))
+        .take(MAX_BASE_NAME)
+        .collect();
     if trim { s.trim().to_owned() } else { s }
 }
 
 fn strip_number(name: &str) -> &str {
     let b = name.as_bytes();
-    if b.len() > 3 && b[0].is_ascii_digit() && b[1].is_ascii_digit() && b[2] == b' ' { &name[3..] } else { name }
+    if b.len() > 3 && b[0].is_ascii_digit() && b[1].is_ascii_digit() && b[2] == b' ' {
+        &name[3..]
+    } else {
+        name
+    }
 }
 
 pub struct Prepared {
@@ -165,14 +189,32 @@ pub struct Prepared {
 /// File names of European/PAL releases usually carry a region tag.
 fn name_looks_pal(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    ["europe", "pal", "australia", "germany", "france", "spain", "italy", "sweden", "(e)"].iter().any(|t| n.contains(t))
+    [
+        "europe",
+        "pal",
+        "australia",
+        "germany",
+        "france",
+        "spain",
+        "italy",
+        "sweden",
+        "(e)",
+    ]
+    .iter()
+    .any(|t| n.contains(t))
 }
 
 /// Validates an `.nes` file and returns the ROM image to store (header + data, padded to 256).
 pub fn prepare_rom(nes: &[u8]) -> Result<Prepared> {
-    let Some(h) = parse_ines(nes) else { bail!("файл не является iNES-образом (нет заголовка NES 1A)") };
+    let Some(h) = parse_ines(nes) else {
+        bail!("файл не является iNES-образом (нет заголовка NES 1A)")
+    };
     let nes2 = nes[7] & 0x0C == 0x08;
-    let pal = if nes2 { nes[12] & 3 == 1 } else { nes[9] & 1 == 1 && nes[12..16] == [0; 4] };
+    let pal = if nes2 {
+        nes[12] & 3 == 1
+    } else {
+        nes[9] & 1 == 1 && nes[12..16] == [0; 4]
+    };
     if nes2 && (nes[9] != 0 || nes[8] & 0x0F != 0) {
         bail!("NES 2.0: mapper больше 255 или нестандартные размеры ROM не поддерживаются");
     }
@@ -198,26 +240,51 @@ pub fn prepare_rom(nes: &[u8]) -> Result<Prepared> {
 impl Library {
     pub fn from_dump(dump: Vec<u8>) -> Result<Self> {
         let cat = parse(&dump)?;
-        let rom_start = cat.games.iter().map(|g| g.rom_offset as usize).min().unwrap();
-        let rom_end = cat.games.iter().map(|g| (g.rom_offset + g.rom_size) as usize).max().unwrap();
+        let rom_start = cat
+            .games
+            .iter()
+            .map(|g| g.rom_offset as usize)
+            .min()
+            .unwrap();
+        let rom_end = cat
+            .games
+            .iter()
+            .map(|g| (g.rom_offset + g.rom_size) as usize)
+            .max()
+            .unwrap();
         if rom_start < cat.table_offset + ENTRY_LEN {
             bail!("неподдерживаемая раскладка: ROM расположены перед таблицей");
         }
         // The ROM area ends where the next non-erased sector (settings / filesystem) begins.
         let area_end = (rom_end.next_multiple_of(SECTOR)..dump.len())
             .step_by(SECTOR)
-            .find(|&o| dump[o..(o + SECTOR).min(dump.len())].iter().any(|&b| b != FLASH_ERASED))
+            .find(|&o| {
+                dump[o..(o + SECTOR).min(dump.len())]
+                    .iter()
+                    .any(|&b| b != FLASH_ERASED)
+            })
             .unwrap_or(dump.len());
         let entries = cat
             .games
             .iter()
             .map(|g| {
-                let rom = dump[g.rom_offset as usize..(g.rom_offset + g.rom_size) as usize].to_vec();
+                let rom =
+                    dump[g.rom_offset as usize..(g.rom_offset + g.rom_size) as usize].to_vec();
                 let pal = rom[9] & 1 == 1 && rom[12..16] == [0; 4] && rom[..4] == INES_MAGIC;
-                Entry { name: strip_number(&g.name).to_owned(), rom, pal }
+                Entry {
+                    name: strip_number(&g.name).to_owned(),
+                    rom,
+                    pal,
+                }
             })
             .collect();
-        Ok(Self { base: dump, table_offset: cat.table_offset, rom_start, area_end, entries })
+        Ok(Self {
+            base: dump,
+            table_offset: cat.table_offset,
+            rom_start,
+            area_end,
+            entries,
+        })
     }
 
     #[cfg(test)]
@@ -266,7 +333,11 @@ impl Library {
         }
         let total = self.used() - old_len + new_len;
         if total > self.capacity() {
-            bail!("не хватает места: нужно {} КиБ, доступно {} КиБ", total / 1024, self.capacity() / 1024);
+            bail!(
+                "не хватает места: нужно {} КиБ, доступно {} КиБ",
+                total / 1024,
+                self.capacity() / 1024
+            );
         }
         Ok(())
     }
@@ -279,7 +350,11 @@ impl Library {
     pub fn insert(&mut self, at: usize, name: &str, nes: &[u8]) -> Result<()> {
         let p = prepare_rom(nes)?;
         self.ensure_fits(p.rom.len(), 0, true)?;
-        let entry = Entry { name: Self::entry_name(name), rom: p.rom, pal: p.pal || name_looks_pal(name) };
+        let entry = Entry {
+            name: Self::entry_name(name),
+            rom: p.rom,
+            pal: p.pal || name_looks_pal(name),
+        };
         self.entries.insert(at.min(self.entries.len()), entry);
         Ok(())
     }
@@ -287,7 +362,11 @@ impl Library {
     pub fn replace(&mut self, i: usize, name: &str, nes: &[u8]) -> Result<()> {
         let p = prepare_rom(nes)?;
         self.ensure_fits(p.rom.len(), self.entries[i].rom.len(), false)?;
-        self.entries[i] = Entry { name: Self::entry_name(name), rom: p.rom, pal: p.pal || name_looks_pal(name) };
+        self.entries[i] = Entry {
+            name: Self::entry_name(name),
+            rom: p.rom,
+            pal: p.pal || name_looks_pal(name),
+        };
         Ok(())
     }
 
@@ -308,7 +387,11 @@ impl Library {
     pub fn build(&self) -> Result<Vec<u8>> {
         self.ensure_fits(0, 0, false)?;
         if self.entries.len() > self.max_entries() {
-            bail!("слишком много игр: {} (максимум {})", self.entries.len(), self.max_entries());
+            bail!(
+                "слишком много игр: {} (максимум {})",
+                self.entries.len(),
+                self.max_entries()
+            );
         }
         let mut out = self.base.clone();
         out[self.table_offset..self.rom_start].fill(FLASH_ERASED);
@@ -370,14 +453,18 @@ mod tests {
         let c = parse(&lib.build().unwrap()).unwrap();
         let names: Vec<_> = c.games.iter().map(|g| g.name.as_str()).collect();
         assert_eq!(names, ["01 B", "02 A"]);
-        assert_eq!((c.games[0].rom_offset, c.games[1].rom_offset), (0x2000, 0x2100));
+        assert_eq!(
+            (c.games[0].rom_offset, c.games[1].rom_offset),
+            (0x2000, 0x2100)
+        );
         assert_eq!(c.games[0].ines.as_ref().unwrap().prg_kib, 16);
     }
 
     #[test]
     fn insert_replace_remove_and_capacity() {
         let mut lib = Library::from_dump(synthetic()).unwrap();
-        lib.insert(1, "Новая игра with a very long name", &nes_file(1, 1)).unwrap();
+        lib.insert(1, "Новая игра with a very long name", &nes_file(1, 1))
+            .unwrap();
         assert_eq!(lib.numbered_name(1), "02 with a very lon");
         assert_eq!(lib.numbered_name(2), "03 B");
         lib.replace(0, "Repl", &nes_file(1, 0)).unwrap();
@@ -421,7 +508,9 @@ mod tests {
         let mut seed = 0x1234_5678;
         let mut img = vec![0xFF; 2 * 1024 * 1024];
         img[..0x64000].iter_mut().for_each(|b| *b = prng(&mut seed));
-        img[0x1F2000..0x1F9000].iter_mut().for_each(|b| *b = prng(&mut seed));
+        img[0x1F2000..0x1F9000]
+            .iter_mut()
+            .for_each(|b| *b = prng(&mut seed));
 
         let shapes: [(usize, usize); 6] = [(2, 1), (1, 1), (2, 2), (4, 2), (2, 0), (1, 0)];
         let mut offset = 0x65000;
@@ -431,10 +520,27 @@ mod tests {
             let size = real.next_multiple_of(256);
             let mut rom: Vec<u8> = (0..size).map(|_| prng(&mut seed)).collect();
             rom[..4].copy_from_slice(&INES_MAGIC);
-            rom[4..16].copy_from_slice(&[prg as u8, chr as u8, (i as u8 % 4) << 4, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            rom[4..16].copy_from_slice(&[
+                prg as u8,
+                chr as u8,
+                (i as u8 % 4) << 4,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ]);
             img[offset..offset + size].copy_from_slice(&rom);
             let table = 0x64000 + i * ENTRY_LEN;
-            img[table..table + ENTRY_LEN].copy_from_slice(&entry(&format!("{:02} Game {}", i + 1, i + 1), offset as u32, size as u32));
+            img[table..table + ENTRY_LEN].copy_from_slice(&entry(
+                &format!("{:02} Game {}", i + 1, i + 1),
+                offset as u32,
+                size as u32,
+            ));
             offset += size;
         }
         img
@@ -469,14 +575,20 @@ mod tests {
             assert!(g.ines.is_some());
         }
         assert_eq!(c.games[3].name, "04 New");
-        assert!(c.games.windows(2).all(|w| w[0].rom_offset + w[0].rom_size == w[1].rom_offset));
+        assert!(
+            c.games
+                .windows(2)
+                .all(|w| w[0].rom_offset + w[0].rom_size == w[1].rom_offset)
+        );
     }
 
     /// Optional check against a real dump: `FLASHER_REAL_DUMP=<file> cargo test`.
     /// Skipped when the variable is not set; real dumps never belong in the repository.
     #[test]
     fn real_dump_invariants_if_provided() {
-        let Some(path) = std::env::var_os("FLASHER_REAL_DUMP") else { return };
+        let Some(path) = std::env::var_os("FLASHER_REAL_DUMP") else {
+            return;
+        };
         let dump = std::fs::read(path).unwrap();
         let lib = Library::from_dump(dump.clone()).unwrap();
         assert!(lib.entries.iter().all(|e| e.ines().is_some()));
@@ -512,7 +624,14 @@ mod tests {
         assert_eq!(c.table_offset, 0x1000);
         assert_eq!(c.games.len(), 2);
         assert_eq!(c.games[0].name, "01 Mario");
-        assert_eq!(c.games[0].ines, Some(Ines { prg_kib: 32, chr_kib: 8, mapper: 2 }));
+        assert_eq!(
+            c.games[0].ines,
+            Some(Ines {
+                prg_kib: 32,
+                chr_kib: 8,
+                mapper: 2
+            })
+        );
         assert_eq!(c.games[1].ines, None);
     }
 
@@ -527,8 +646,22 @@ mod tests {
         assert!(prepared.pal);
         let rom = prepared.rom;
         assert_eq!(&rom[4..16], &[2, 1, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(parse_ines(&rom).unwrap(), Ines { prg_kib: 32, chr_kib: 8, mapper: 1 });
-        assert_eq!(rom[16..], f[16..].iter().copied().chain(std::iter::repeat_n(0, rom.len() - f.len())).collect::<Vec<_>>()[..]);
+        assert_eq!(
+            parse_ines(&rom).unwrap(),
+            Ines {
+                prg_kib: 32,
+                chr_kib: 8,
+                mapper: 1
+            }
+        );
+        assert_eq!(
+            rom[16..],
+            f[16..]
+                .iter()
+                .copied()
+                .chain(std::iter::repeat_n(0, rom.len() - f.len()))
+                .collect::<Vec<_>>()[..]
+        );
         f[8] = 0x01; // mapper bits 8..11
         assert!(prepare_rom(&f).is_err());
     }

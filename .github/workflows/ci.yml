@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: |
+          cargo fmt --all --check
+          cd rp2040-payload
+          cargo fmt --check
+      - name: Clippy (workspace)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (payload)
+        working-directory: rp2040-payload
+        run: cargo clippy -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Build (also builds the embedded payload)
+        run: cargo build --release -p flasher

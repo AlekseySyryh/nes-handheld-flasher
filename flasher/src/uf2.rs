@@ -24,7 +24,12 @@ pub fn from_flash_image(image: &[u8]) -> Vec<u8> {
 /// Like `from_flash_image`, but only for the bytes `start..end` of the image (both must be
 /// multiples of the 256-byte page). The bootloader leaves everything outside the range alone.
 pub fn from_flash_range(image: &[u8], start: usize, end: usize) -> Vec<u8> {
-    assert!(start.is_multiple_of(PAGE) && end.is_multiple_of(PAGE) && start <= end && end <= image.len());
+    assert!(
+        start.is_multiple_of(PAGE)
+            && end.is_multiple_of(PAGE)
+            && start <= end
+            && end <= image.len()
+    );
     let total = ((end - start) / PAGE) as u32;
     let mut out = Vec::with_capacity(total as usize * BLOCK_LEN);
     for (n, chunk) in image[start..end].chunks(PAGE).enumerate() {
@@ -50,7 +55,10 @@ pub fn from_flash_range(image: &[u8], start: usize, end: usize) -> Vec<u8> {
 /// Checks that `data` is a well-formed RP2040 UF2 file targeting flash; returns the block count.
 pub fn validate(data: &[u8]) -> Result<usize, String> {
     if data.is_empty() || !data.len().is_multiple_of(BLOCK_LEN) {
-        return Err(format!("размер файла ({} байт) не кратен {BLOCK_LEN}", data.len()));
+        return Err(format!(
+            "размер файла ({} байт) не кратен {BLOCK_LEN}",
+            data.len()
+        ));
     }
     let total = data.len() / BLOCK_LEN;
     for (n, b) in data.chunks(BLOCK_LEN).enumerate() {
@@ -99,9 +107,15 @@ mod tests {
         let word = |b: &[u8], i: usize| u32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap());
         let mut restored = Vec::new();
         for (n, b) in uf2.chunks(BLOCK_LEN).enumerate() {
-            assert_eq!([word(b, 0), word(b, 1), word(b, 127)], [MAGIC_START0, MAGIC_START1, MAGIC_END]);
+            assert_eq!(
+                [word(b, 0), word(b, 1), word(b, 127)],
+                [MAGIC_START0, MAGIC_START1, MAGIC_END]
+            );
             assert_eq!(word(b, 3), FLASH_BASE + (n * PAGE) as u32);
-            assert_eq!((word(b, 5), word(b, 6), word(b, 7)), (n as u32, 3, RP2040_FAMILY_ID));
+            assert_eq!(
+                (word(b, 5), word(b, 6), word(b, 7)),
+                (n as u32, 3, RP2040_FAMILY_ID)
+            );
             restored.extend_from_slice(&b[32..32 + PAGE]);
         }
         assert_eq!(restored, image);
@@ -114,7 +128,10 @@ mod tests {
         assert_eq!(uf2.len(), 3 * BLOCK_LEN);
         for (n, b) in uf2.chunks(BLOCK_LEN).enumerate() {
             let word = |i: usize| u32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap());
-            assert_eq!((word(3), word(5), word(6)), (FLASH_BASE + ((2 + n) * PAGE) as u32, n as u32, 3));
+            assert_eq!(
+                (word(3), word(5), word(6)),
+                (FLASH_BASE + ((2 + n) * PAGE) as u32, n as u32, 3)
+            );
             assert!(b[32..32 + PAGE].iter().all(|&x| x == (2 + n) as u8));
         }
     }

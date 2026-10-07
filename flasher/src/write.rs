@@ -34,13 +34,25 @@ pub fn spawn(tx: Sender<Event>, ctx: egui::Context, cancel: Arc<AtomicBool>, uf2
 
 fn run(rep: &Reporter, uf2: &[u8]) -> Result<Summary> {
     rep.step(Step::WaitBootsel);
-    let drive = rep.wait_for(None, "устройство в режиме BOOTSEL", devices::find_bootsel_drives_first)?;
-    rep.log(format!("BOOTSEL: {} (Board-ID {})", drive.mount_point.display(), drive.board_id));
+    let drive = rep.wait_for(
+        None,
+        "устройство в режиме BOOTSEL",
+        devices::find_bootsel_drives_first,
+    )?;
+    rep.log(format!(
+        "BOOTSEL: {} (Board-ID {})",
+        drive.mount_point.display(),
+        drive.board_id
+    ));
 
     rep.step(Step::Flash);
     let target = drive.mount_point.join("firmware.uf2");
     rep.log(format!("Копирую {} байт в {}", uf2.len(), target.display()));
-    let drive_present = || devices::find_bootsel_drives().iter().any(|d| d.mount_point == drive.mount_point);
+    let drive_present = || {
+        devices::find_bootsel_drives()
+            .iter()
+            .any(|d| d.mount_point == drive.mount_point)
+    };
     let total = uf2.len().div_ceil(BLOCK_LEN) as u32;
     let mut file = File::create(&target).context("создание файла на диске BOOTSEL")?;
     let chunks = uf2.len().div_ceil(CHUNK);
@@ -50,7 +62,9 @@ fn run(rep: &Reporter, uf2: &[u8]) -> Result<Summary> {
             // The bootloader reboots as soon as the last block is in, which may fail the final call.
             thread::sleep(Duration::from_millis(500));
             if i + 1 == chunks && !drive_present() {
-                rep.log(format!("Последняя запись завершилась ошибкой ({e}), но диск исчез - прошивка принята"));
+                rep.log(format!(
+                    "Последняя запись завершилась ошибкой ({e}), но диск исчез - прошивка принята"
+                ));
                 break;
             }
             bail!(
@@ -60,17 +74,28 @@ fn run(rep: &Reporter, uf2: &[u8]) -> Result<Summary> {
             );
         }
         done += chunk.len();
-        rep.send(Event::Progress { done: done.div_ceil(BLOCK_LEN) as u32, total });
+        rep.send(Event::Progress {
+            done: done.div_ceil(BLOCK_LEN) as u32,
+            total,
+        });
     }
     drop(file);
     rep.send(Event::Progress { done: total, total });
 
     rep.step(Step::WaitRestart);
-    rep.wait_for(Some(FLASH_TIMEOUT), "завершение прошивки (диск BOOTSEL не исчез)", || {
-        (!drive_present()).then_some(())
-    })?;
+    rep.wait_for(
+        Some(FLASH_TIMEOUT),
+        "завершение прошивки (диск BOOTSEL не исчез)",
+        || (!drive_present()).then_some(()),
+    )?;
     rep.log("Диск BOOTSEL исчез: устройство прошито и перезапущено");
 
     rep.step(Step::Finished);
-    Ok(Summary { path: PathBuf::from(&target), size: uf2.len(), crc32: CRC32.checksum(uf2), retries: 0, elapsed: rep.elapsed() })
+    Ok(Summary {
+        path: PathBuf::from(&target),
+        size: uf2.len(),
+        crc32: CRC32.checksum(uf2),
+        retries: 0,
+        elapsed: rep.elapsed(),
+    })
 }

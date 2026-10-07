@@ -121,7 +121,10 @@ pub struct RequestParser {
 
 impl RequestParser {
     pub const fn new() -> Self {
-        Self { buf: [0; REQUEST_LEN], len: 0 }
+        Self {
+            buf: [0; REQUEST_LEN],
+            len: 0,
+        }
     }
 
     pub fn push(&mut self, byte: u8) -> Option<Parsed> {
@@ -201,10 +204,16 @@ mod tests {
 
     #[test]
     fn request_roundtrip_with_garbage_prefix() {
-        let req = Request { command: Command::GetBlock, arg: 42 };
+        let req = Request {
+            command: Command::GetBlock,
+            arg: 42,
+        };
         let mut p = RequestParser::new();
         let mut out = None;
-        for b in [0xB0, 0xB0, 0x07, 0x00, 0x13].into_iter().chain(req.encode()) {
+        for b in [0xB0, 0xB0, 0x07, 0x00, 0x13]
+            .into_iter()
+            .chain(req.encode())
+        {
             out = out.or(p.push(b));
         }
         assert_eq!(out, Some(Parsed::Request(req)));
@@ -212,22 +221,35 @@ mod tests {
 
     #[test]
     fn corrupted_request_is_dropped_then_next_is_accepted() {
-        let req = Request { command: Command::Hello, arg: 0 };
+        let req = Request {
+            command: Command::Hello,
+            arg: 0,
+        };
         let mut bad = req.encode();
         bad[4] ^= 1;
         let mut p = RequestParser::new();
         assert!(bad.into_iter().all(|b| p.push(b).is_none()));
-        assert_eq!(req.encode().into_iter().filter_map(|b| p.push(b)).next(), Some(Parsed::Request(req)));
+        assert_eq!(
+            req.encode().into_iter().filter_map(|b| p.push(b)).next(),
+            Some(Parsed::Request(req))
+        );
     }
 
     #[test]
     fn unknown_command_is_reported() {
-        let mut b = Request { command: Command::Hello, arg: 0 }.encode();
+        let mut b = Request {
+            command: Command::Hello,
+            arg: 0,
+        }
+        .encode();
         b[2] = 0x7E;
         let crc = CRC32.checksum(&b[2..7]);
         b[7..].copy_from_slice(&crc.to_le_bytes());
         let mut p = RequestParser::new();
-        assert_eq!(b.into_iter().filter_map(|x| p.push(x)).next(), Some(Parsed::UnknownCommand));
+        assert_eq!(
+            b.into_iter().filter_map(|x| p.push(x)).next(),
+            Some(Parsed::UnknownCommand)
+        );
     }
 
     #[test]
@@ -237,7 +259,10 @@ mod tests {
         let n = encode_response(&mut out, Kind::Block, &[&7u32.to_le_bytes(), &data]);
         assert_eq!(n, MAX_RESPONSE_LEN);
         let (kind, payload, used) = parse_response(&out[..n]).unwrap();
-        assert_eq!((kind, used, payload.len()), (Kind::Block, n, BLOCK_PAYLOAD_LEN));
+        assert_eq!(
+            (kind, used, payload.len()),
+            (Kind::Block, n, BLOCK_PAYLOAD_LEN)
+        );
         assert_eq!(&payload[..4], &7u32.to_le_bytes());
         assert_eq!(parse_response(&out[..n - 1]), Err(ParseError::Incomplete));
         out[100] ^= 0x10;

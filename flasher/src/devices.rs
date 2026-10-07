@@ -22,7 +22,10 @@ pub fn find_bootsel_drives() -> Vec<BootselDrive> {
                 .find_map(|l| l.strip_prefix("Board-ID:"))
                 .map(|s| s.trim().to_owned())
                 .unwrap_or_else(|| "unknown".into());
-            Some(BootselDrive { mount_point, board_id })
+            Some(BootselDrive {
+                mount_point,
+                board_id,
+            })
         })
         .collect()
 }

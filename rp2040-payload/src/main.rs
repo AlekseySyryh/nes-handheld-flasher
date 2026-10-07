@@ -7,7 +7,7 @@ use core::slice;
 
 use cortex_m::singleton;
 use flasher_protocol::{
-    BLOCK_COUNT, BLOCK_SIZE, ErrorCode, FLASH_SIZE, Kind, MAX_RESPONSE_LEN, Command, Parsed,
+    BLOCK_COUNT, BLOCK_SIZE, Command, ErrorCode, FLASH_SIZE, Kind, MAX_RESPONSE_LEN, Parsed,
     RequestParser, USB_PID, USB_VID, VERSION, encode_response,
 };
 use panic_halt as _;
@@ -44,7 +44,13 @@ fn main() -> ! {
     )
     .unwrap();
 
-    let bus = UsbBus::new(pac.USBCTRL_REGS, pac.USBCTRL_DPRAM, clocks.usb_clock, true, &mut pac.RESETS);
+    let bus = UsbBus::new(
+        pac.USBCTRL_REGS,
+        pac.USBCTRL_DPRAM,
+        clocks.usb_clock,
+        true,
+        &mut pac.RESETS,
+    );
     let bus = singleton!(: UsbBusAllocator<UsbBus> = UsbBusAllocator::new(bus)).unwrap();
     let mut serial = SerialPort::new(bus);
     let mut dev = UsbDeviceBuilder::new(bus, UsbVidPid(USB_VID, USB_PID))
@@ -63,9 +69,13 @@ fn main() -> ! {
         if !dev.poll(&mut [&mut serial]) {
             continue;
         }
-        let Ok(n) = serial.read(&mut rx) else { continue };
+        let Ok(n) = serial.read(&mut rx) else {
+            continue;
+        };
         for &byte in &rx[..n] {
-            let Some(parsed) = parser.push(byte) else { continue };
+            let Some(parsed) = parser.push(byte) else {
+                continue;
+            };
             let (len, reboot) = respond(parsed, &mut frame);
             send(&mut dev, &mut serial, &frame[..len]);
             if reboot {
@@ -77,19 +87,27 @@ fn main() -> ! {
 
 /// Builds the response for a request; returns the frame length and whether to reboot afterwards.
 fn respond(parsed: Parsed, out: &mut [u8]) -> (usize, bool) {
-    let error = |out: &mut [u8], code: ErrorCode| encode_response(out, Kind::Error, &[&[code as u8]]);
+    let error =
+        |out: &mut [u8], code: ErrorCode| encode_response(out, Kind::Error, &[&[code as u8]]);
     match parsed {
         Parsed::UnknownCommand => (error(out, ErrorCode::UnknownCommand), false),
         Parsed::Request(req) => match req.command {
             Command::Hello => {
-                let info = [&[VERSION][..], &FLASH_SIZE.to_le_bytes(), &(BLOCK_SIZE as u32).to_le_bytes()];
+                let info = [
+                    &[VERSION][..],
+                    &FLASH_SIZE.to_le_bytes(),
+                    &(BLOCK_SIZE as u32).to_le_bytes(),
+                ];
                 (encode_response(out, Kind::Info, &info), false)
             }
             Command::GetBlock if req.arg < BLOCK_COUNT => {
                 let addr = XIP_BASE + req.arg as usize * BLOCK_SIZE;
                 // SAFETY: read-only XIP window, the block lies within the 2 MiB flash.
                 let data = unsafe { slice::from_raw_parts(addr as *const u8, BLOCK_SIZE) };
-                (encode_response(out, Kind::Block, &[&req.arg.to_le_bytes(), data]), false)
+                (
+                    encode_response(out, Kind::Block, &[&req.arg.to_le_bytes(), data]),
+                    false,
+                )
             }
             Command::GetBlock => (error(out, ErrorCode::BlockOutOfRange), false),
             Command::Reboot => (encode_response(out, Kind::Ok, &[]), true),
@@ -128,7 +146,9 @@ fn reboot_to_flash() -> ! {
     // Scratch4 holds the bootrom's "reboot into address" magic; make sure it is cleared.
     pac.WATCHDOG.scratch4().write(|w| unsafe { w.bits(0) });
     // Reset everything except XOSC (bit 0) and ROSC (bit 1), like pico-sdk's watchdog_reboot.
-    pac.PSM.wdsel().write(|w| unsafe { w.bits(0x0001_ffff & !0b11) });
+    pac.PSM
+        .wdsel()
+        .write(|w| unsafe { w.bits(0x0001_ffff & !0b11) });
     pac.WATCHDOG.ctrl().write(|w| w.trigger().set_bit());
     loop {
         cortex_m::asm::nop();
