@@ -17,7 +17,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check that the tag matches the crate versions
         run: |
@@ -43,7 +43,7 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          $name = "rp2040-flasher-$env:GITHUB_REF_NAME-windows-x64"
+          $name = "nes-handheld-flasher-$env:GITHUB_REF_NAME-windows-x64"
           New-Item -ItemType Directory -Path "dist/$name" | Out-Null
           Copy-Item target/release/flasher.exe "dist/$name/flasher.exe"
           Copy-Item LICENSE "dist/$name/LICENSE"
