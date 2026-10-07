@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod catalog;
 mod devices;
 mod dump;
@@ -23,7 +25,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "RP2040 Flasher",
+        "NES Handheld Flasher",
         options,
         Box::new(|_cc| Ok(Box::new(FlasherApp::new()))),
     )
@@ -285,7 +287,7 @@ impl eframe::App for FlasherApp {
         }
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("RP2040 Flasher");
+                ui.heading("NES Handheld Flasher");
                 if !matches!(self.screen, Screen::Backup | Screen::Write)
                     && !(self.screen == Screen::Restore && self.run.is_some())
                 {
@@ -305,7 +307,7 @@ impl eframe::App for FlasherApp {
                 Screen::Restore => self.ui_restore(ui),
                 Screen::About => {
                     ui.heading("О программе");
-                    ui.label(format!("RP2040 Flasher, версия {}", env!("CARGO_PKG_VERSION")));
+                    ui.label(format!("NES Handheld Flasher, версия {}", env!("CARGO_PKG_VERSION")));
                     ui.add_space(6.0);
                     ui.label("Инструмент предназначен для работы с собственным устройством и данными пользователя. Программа не содержит игр; за использование и распространение выгруженных ROM отвечает пользователь.");
                     ui.add_space(6.0);
