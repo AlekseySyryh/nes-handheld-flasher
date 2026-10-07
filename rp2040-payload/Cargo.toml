@@ -3,7 +3,7 @@ name = "rp2040-payload"
 description = "no_std firmware for the RP2040, embedded into the flasher"
 version = "1.0.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 # Standalone project, not a member of the root workspace.
 [workspace]
